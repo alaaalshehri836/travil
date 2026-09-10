@@ -1,0 +1,487 @@
+import { useState, useEffect, useRef } from "react";
+
+// ---------- بيانات وهمية ----------
+const TRAVELERS = [
+  { id: "SA-2291", name: "منى عبدالله السالم", nationality: "سعودية", age: 67, visa: "عودة مواطن", trips: 34, flag: "🇸🇦" },
+  { id: "EG-1187", name: "أحمد كمال حسن", nationality: "مصرية", age: 29, visa: "عمل", trips: 2, flag: "🇪🇬" },
+  { id: "PK-5502", name: "محمد إقبال خان", nationality: "باكستانية", age: 41, visa: "عمرة", trips: 1, flag: "🇵🇰" },
+  { id: "US-0043", name: "جيمس أندرسون", nationality: "أمريكية", age: 35, visa: "سياحة", trips: 1, flag: "🇺🇸" },
+  { id: "SA-8810", name: "عائلة الحربي (٥ أفراد)", nationality: "سعودية", age: 8, visa: "عودة مواطن", trips: 12, flag: "🇸🇦" },
+];
+
+function decideRoute(t) {
+  if (t.age >= 60) return { label: "مسار المساعدة الخاصة", reason: "المسافر من كبار السن — يحتاج وقتًا ومساعدة إضافية", tone: "assist" };
+  if (t.name.includes("عائلة")) return { label: "مسار العائلات", reason: "مجموعة عائلية — كاونتر مخصص لتسريع الإجراء", tone: "assist" };
+  if (t.trips >= 10) return { label: "المسار السريع", reason: "مسافر متكرر موثّق — تحقق مبسّط", tone: "fast" };
+  if (t.visa === "عمرة") return { label: "مسار الحجاج والمعتمرين", reason: "مسار مخصص لإدارة الأفواج الكبيرة", tone: "standard" };
+  return { label: "المسار العادي", reason: "لا توجد معطيات تستدعي مسارًا خاصًا", tone: "standard" };
+}
+
+function QR({ value, size = 132 }) {
+  // توليد نمط شبيه بـ QR بشكل حتمي من النص (عرض تجريبي بصري فقط)
+  const grid = 14;
+  const cells = [];
+  let seed = 0;
+  for (let i = 0; i < value.length; i++) seed = (seed * 31 + value.charCodeAt(i)) % 100000;
+  const rand = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+  for (let i = 0; i < grid * grid; i++) cells.push(rand() > 0.55);
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        display: "grid",
+        gridTemplateColumns: `repeat(${grid}, 1fr)`,
+        background: "#fff",
+        padding: 8,
+        borderRadius: 10,
+        boxSizing: "border-box",
+      }}
+    >
+      {cells.map((on, i) => (
+        <div key={i} style={{ background: on ? "#0B3D2E" : "transparent" }} />
+      ))}
+    </div>
+  );
+}
+
+export default function App() {
+  const [tab, setTab] = useState("traveler");
+  const [travelerIdx, setTravelerIdx] = useState(0);
+  const [scanned, setScanned] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const [log, setLog] = useState([]); // {tone: pos/neu/neg, point, time}
+  const [points] = useState(["الجوازات", "الجمارك", "التفتيش الأمني"]);
+  const [activePoint, setActivePoint] = useState(0);
+  const [pulse, setPulse] = useState(false);
+  const dashRef = useRef(null);
+
+  const traveler = TRAVELERS[travelerIdx];
+
+  function handleScan() {
+    setScanning(true);
+    setTimeout(() => {
+      setScanning(false);
+      setScanned(traveler);
+    }, 900);
+  }
+
+  function submitFeedback(tone) {
+    setLog((l) => [...l, { tone, point: points[activePoint], time: Date.now() }].slice(-60));
+    setPulse(true);
+    setTimeout(() => setPulse(false), 500);
+  }
+
+  const counts = { راضٍ: 0, عادي: 0, "غير راضٍ": 0 };
+  const toneLabel = { pos: "راضٍ", neu: "عادي", neg: "غير راضٍ" };
+  log.forEach((e) => (counts[toneLabel[e.tone]] += 1));
+  const total = log.length || 1;
+  const negRate = Math.round((counts["غير راضٍ"] / total) * 100);
+
+  const recentNeg = log.slice(-8).filter((e) => e.tone === "neg").length;
+  const alertPoint = recentNeg >= 3 ? points[activePoint] : null;
+
+  return (
+    <div dir="rtl" style={S.page}>
+      <style>{`
+        * { box-sizing: border-box; }
+        body { margin: 0; }
+        @keyframes rise { from { opacity: 0; transform: translateY(6px);} to { opacity: 1; transform: translateY(0);} }
+        @keyframes scanline { 0% { transform: translateY(-100%);} 100% { transform: translateY(100%);} }
+        .rise { animation: rise .35s ease both; }
+      `}</style>
+
+      <header style={S.header}>
+        <div style={S.headerInner}>
+          <div style={S.brandRow}>
+            <div style={S.seal}>ه.د</div>
+            <div>
+              <div style={S.brandTitle}>رحلة — الهوية الرقمية التنبؤية للمسافر</div>
+              <div style={S.brandSub}>وزارة الداخلية · هاكثون تجربة المسافر</div>
+            </div>
+          </div>
+          <nav style={S.nav}>
+            {[
+              ["traveler", "المسافر"],
+              ["checkpoint", "نقطة التفتيش"],
+              ["dashboard", "لوحة الرصد الحي"],
+            ].map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setTab(k)}
+                style={{ ...S.navBtn, ...(tab === k ? S.navBtnActive : {}) }}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      <main style={S.main}>
+        {tab === "traveler" && (
+          <div className="rise" style={S.grid2}>
+            <div style={S.card}>
+              <div style={S.cardLabel}>اختر مسافرًا تجريبيًا</div>
+              <div style={S.travelerList}>
+                {TRAVELERS.map((t, i) => (
+                  <button
+                    key={t.id}
+                    onClick={() => {
+                      setTravelerIdx(i);
+                      setScanned(null);
+                    }}
+                    style={{
+                      ...S.travelerItem,
+                      ...(i === travelerIdx ? S.travelerItemActive : {}),
+                    }}
+                  >
+                    <span style={{ fontSize: 22 }}>{t.flag}</span>
+                    <span style={{ flex: 1, textAlign: "right" }}>
+                      <div style={{ fontWeight: 600 }}>{t.name}</div>
+                      <div style={{ fontSize: 12, color: "#6b6355" }}>{t.visa} · {t.id}</div>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={S.card}>
+              <div style={S.cardLabel}>الهوية الرقمية للمسافر</div>
+              <div style={S.idCard}>
+                <div style={S.idHeaderRow}>
+                  <div style={S.idSealSmall}>ه.د</div>
+                  <div style={{ fontSize: 12, color: "#cfd9d0" }}>هوية رقمية موحّدة</div>
+                </div>
+                <div style={{ display: "flex", gap: 18, alignItems: "center", marginTop: 14 }}>
+                  <QR value={traveler.id} />
+                  <div>
+                    <div style={{ fontSize: 19, fontWeight: 700 }}>{traveler.name}</div>
+                    <div style={{ fontSize: 13, color: "#cfd9d0", marginTop: 4 }}>{traveler.nationality} · {traveler.flag}</div>
+                    <div style={{ fontSize: 13, color: "#cfd9d0" }}>تأشيرة: {traveler.visa}</div>
+                    <div style={{ fontSize: 13, color: "#cfd9d0" }}>رقم الهوية: {traveler.id}</div>
+                    <div style={{ fontSize: 13, color: "#cfd9d0" }}>عدد الرحلات السابقة: {traveler.trips}</div>
+                  </div>
+                </div>
+              </div>
+              <p style={S.hint}>
+                رمز واحد يُقرأ في كل نقطة تفتيش داخل المنفذ، فلا يعيد المسافر إدخال بياناته أكثر من مرة.
+              </p>
+              <button style={S.primaryBtn} onClick={() => setTab("checkpoint")}>
+                الانتقال إلى نقطة التفتيش ←
+              </button>
+            </div>
+          </div>
+        )}
+
+        {tab === "checkpoint" && (
+          <div className="rise" style={S.grid2}>
+            <div style={S.card}>
+              <div style={S.cardLabel}>محطة الموظف — مسح الهوية الرقمية</div>
+              <div style={S.scanBox}>
+                {!scanned && (
+                  <>
+                    <div style={{ position: "relative", overflow: "hidden", borderRadius: 12 }}>
+                      <QR value={traveler.id} size={160} />
+                      {scanning && <div style={S.scanline} />}
+                    </div>
+                    <button style={S.primaryBtn} onClick={handleScan} disabled={scanning}>
+                      {scanning ? "جارِ المسح…" : "مسح الرمز"}
+                    </button>
+                  </>
+                )}
+                {scanned && (
+                  <div className="rise" style={{ width: "100%" }}>
+                    <div style={S.resultHeader}>
+                      <span style={{ fontSize: 26 }}>{scanned.flag}</span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 17 }}>{scanned.name}</div>
+                        <div style={{ fontSize: 13, color: "#6b6355" }}>{scanned.nationality} · تأشيرة {scanned.visa}</div>
+                      </div>
+                    </div>
+                    {(() => {
+                      const r = decideRoute(scanned);
+                      const toneColor = r.tone === "assist" ? "#B8894A" : r.tone === "fast" ? "#2D6A4F" : "#5c6b63";
+                      return (
+                        <div style={{ ...S.routeBox, borderColor: toneColor }}>
+                          <div style={{ fontSize: 12, color: toneColor, fontWeight: 700 }}>التوجيه المقترح آليًا</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>{r.label}</div>
+                          <div style={{ fontSize: 13, color: "#6b6355", marginTop: 4 }}>{r.reason}</div>
+                        </div>
+                      );
+                    })()}
+                    <button style={S.ghostBtn} onClick={() => setScanned(null)}>
+                      مسح مسافر آخر
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={S.card}>
+              <div style={S.cardLabel}>شاشة المسافر — كيف كانت تجربتك الآن؟</div>
+              <div style={S.pointRow}>
+                {points.map((p, i) => (
+                  <button
+                    key={p}
+                    onClick={() => setActivePoint(i)}
+                    style={{ ...S.pointChip, ...(i === activePoint ? S.pointChipActive : {}) }}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+              <div style={S.feedbackRow}>
+                <button style={S.feedbackBtn} onClick={() => submitFeedback("pos")}>
+                  <span style={{ fontSize: 34 }}>🙂</span>
+                  <span>راضٍ</span>
+                </button>
+                <button style={S.feedbackBtn} onClick={() => submitFeedback("neu")}>
+                  <span style={{ fontSize: 34 }}>😐</span>
+                  <span>عادي</span>
+                </button>
+                <button style={S.feedbackBtn} onClick={() => submitFeedback("neg")}>
+                  <span style={{ fontSize: 34 }}>🙁</span>
+                  <span>غير راضٍ</span>
+                </button>
+              </div>
+              <p style={S.hint}>ضغطة واحدة بدل استبيان كامل — البيانات تصل فورًا للوحة الرصد.</p>
+              <button style={S.primaryBtn} onClick={() => setTab("dashboard")}>
+                عرض لوحة الرصد الحي ←
+              </button>
+            </div>
+          </div>
+        )}
+
+        {tab === "dashboard" && (
+          <div className="rise">
+            <div style={{ ...S.card, marginBottom: 16 }}>
+              <div style={S.cardLabel}>مؤشرات لحظية — كل نقاط التفتيش</div>
+              <div style={S.statsRow}>
+                <Stat label="إجمالي التقييمات" value={log.length} pulse={pulse} />
+                <Stat label="راضٍ" value={counts["راضٍ"]} color="#2D6A4F" />
+                <Stat label="عادي" value={counts["عادي"]} color="#B8894A" />
+                <Stat label="غير راضٍ" value={counts["غير راضٍ"]} color="#B8433A" />
+                <Stat label="نسبة عدم الرضا" value={`${log.length ? negRate : 0}%`} color="#B8433A" />
+              </div>
+            </div>
+
+            {alertPoint && (
+              <div style={S.alertBox} className="rise">
+                ⚠️ تنبيه فوري: ارتفاع ملحوظ في عدم الرضا عند نقطة «{alertPoint}» — يُنصح بزيادة الموظفين أو فتح كاونتر إضافي الآن.
+              </div>
+            )}
+
+            <div style={S.grid3}>
+              {points.map((p) => {
+                const pointLog = log.filter((e) => e.point === p);
+                const c = { pos: 0, neu: 0, neg: 0 };
+                pointLog.forEach((e) => (c[e.tone] += 1));
+                const t = pointLog.length || 1;
+                return (
+                  <div key={p} style={S.card}>
+                    <div style={S.cardLabel}>{p}</div>
+                    <div style={{ fontSize: 13, color: "#6b6355", marginBottom: 10 }}>
+                      {pointLog.length} تقييم مسجّل
+                    </div>
+                    <Bar label="راضٍ" pct={(c.pos / t) * 100} color="#2D6A4F" />
+                    <Bar label="عادي" pct={(c.neu / t) * 100} color="#B8894A" />
+                    <Bar label="غير راضٍ" pct={(c.neg / t) * 100} color="#B8433A" />
+                  </div>
+                );
+              })}
+            </div>
+
+            {log.length === 0 && (
+              <p style={{ ...S.hint, textAlign: "center", marginTop: 24 }}>
+                لا توجد بيانات بعد — انتقل إلى «نقطة التفتيش» وسجّل بعض التقييمات لتشغيل اللوحة.
+              </p>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function Stat({ label, value, color = "#0B3D2E", pulse }) {
+  return (
+    <div style={{ ...S.stat, transform: pulse ? "scale(1.04)" : "scale(1)", transition: "transform .25s" }}>
+      <div style={{ fontSize: 30, fontWeight: 800, color }}>{value}</div>
+      <div style={{ fontSize: 13, color: "#6b6355" }}>{label}</div>
+    </div>
+  );
+}
+
+function Bar({ label, pct, color }) {
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b6355", marginBottom: 3 }}>
+        <span>{label}</span>
+        <span>{Math.round(pct)}%</span>
+      </div>
+      <div style={{ background: "#eee8db", borderRadius: 6, height: 8, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, background: color, height: "100%", transition: "width .4s ease" }} />
+      </div>
+    </div>
+  );
+}
+
+const S = {
+  page: {
+    minHeight: "100vh",
+    background: "#F5F1E8",
+    fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+    color: "#1A1A1A",
+  },
+  header: { background: "#0B3D2E", color: "#fff", padding: "16px 0", position: "sticky", top: 0, zIndex: 10 },
+  headerInner: {
+    maxWidth: 980,
+    margin: "0 auto",
+    padding: "0 20px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  brandRow: { display: "flex", alignItems: "center", gap: 12 },
+  seal: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    background: "#B8894A",
+    color: "#0B3D2E",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontWeight: 800,
+    fontSize: 15,
+  },
+  brandTitle: { fontWeight: 700, fontSize: 16 },
+  brandSub: { fontSize: 12, color: "#cfd9d0" },
+  nav: { display: "flex", gap: 6 },
+  navBtn: {
+    background: "transparent",
+    border: "1px solid rgba(255,255,255,0.25)",
+    color: "#e7ece8",
+    padding: "8px 14px",
+    borderRadius: 8,
+    cursor: "pointer",
+    fontSize: 13,
+    fontFamily: "inherit",
+  },
+  navBtnActive: { background: "#B8894A", borderColor: "#B8894A", color: "#0B3D2E", fontWeight: 700 },
+  main: { maxWidth: 980, margin: "0 auto", padding: "28px 20px 60px" },
+  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 },
+  grid3: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 },
+  card: { background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #eae4d6" },
+  cardLabel: { fontSize: 13, fontWeight: 700, color: "#0B3D2E", marginBottom: 12 },
+  travelerList: { display: "flex", flexDirection: "column", gap: 8 },
+  travelerItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #eae4d6",
+    background: "#fdfcf9",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    textAlign: "right",
+  },
+  travelerItemActive: { borderColor: "#B8894A", background: "#fbf3e6" },
+  idCard: { background: "#0B3D2E", color: "#fff", borderRadius: 14, padding: 18 },
+  idHeaderRow: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+  idSealSmall: {
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    background: "#B8894A",
+    color: "#0B3D2E",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 11,
+    fontWeight: 800,
+  },
+  hint: { fontSize: 12.5, color: "#6b6355", marginTop: 12, lineHeight: 1.6 },
+  primaryBtn: {
+    marginTop: 14,
+    width: "100%",
+    background: "#0B3D2E",
+    color: "#fff",
+    border: "none",
+    padding: "12px 16px",
+    borderRadius: 10,
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
+  ghostBtn: {
+    marginTop: 10,
+    width: "100%",
+    background: "transparent",
+    color: "#0B3D2E",
+    border: "1px solid #d8d0bd",
+    padding: "10px 16px",
+    borderRadius: 10,
+    fontSize: 13,
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
+  scanBox: { display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "10px 0" },
+  scanline: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    height: 3,
+    background: "#B8894A",
+    top: 0,
+    animation: "scanline 0.9s linear infinite",
+  },
+  resultHeader: { display: "flex", alignItems: "center", gap: 10, marginBottom: 14 },
+  routeBox: { border: "1.5px solid", borderRadius: 12, padding: 14, background: "#fdfcf9" },
+  pointRow: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
+  pointChip: {
+    padding: "7px 12px",
+    borderRadius: 20,
+    border: "1px solid #d8d0bd",
+    background: "#fdfcf9",
+    fontSize: 12.5,
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
+  pointChipActive: { background: "#0B3D2E", color: "#fff", borderColor: "#0B3D2E" },
+  feedbackRow: { display: "flex", gap: 10 },
+  feedbackBtn: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 6,
+    padding: "16px 8px",
+    borderRadius: 12,
+    border: "1px solid #eae4d6",
+    background: "#fdfcf9",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    fontSize: 13,
+  },
+  statsRow: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 },
+  stat: { background: "#fdfcf9", border: "1px solid #eae4d6", borderRadius: 10, padding: "14px 8px", textAlign: "center" },
+  alertBox: {
+    background: "#fdece9",
+    border: "1px solid #f0b6ac",
+    color: "#8a2c22",
+    padding: "12px 16px",
+    borderRadius: 10,
+    fontSize: 13.5,
+    marginBottom: 16,
+    fontWeight: 600,
+  },
+};
